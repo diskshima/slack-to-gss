@@ -4,7 +4,8 @@
   "description": "Google App Script to copy Slack messages to a Google Spreadsheet",
   "main": "app.js",
   "scripts": {
-    "build": "babel src -d dist"
+    "build": "babel src -d dist",
+    "copy": "babel src -d dist && cat dist/app.js | pbcopy"
   },
   "dependencies": {
     "babel-cli": "^6.24.1",
