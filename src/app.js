@@ -116,13 +116,18 @@ class SlackApi {
     return data;
   }
 
+  replaceUserIdWithName(userId: string): string {
+    const name = this.memberNames[userId];
+    return name ? `${name}` : userId;
+  }
+
   unescapeMessageText(text: ?string): string {
     return (text || '')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
       .replace(/&amp;/g, '&')
-      .replace(/<@(.+?)>/g, ($0, userID) => {
+      .replace(/<@(\w+?)>/g, ($0, userID) => {
         const name = this.memberNames[userID];
         return name ? `@${name}` : $0;
       });
@@ -149,12 +154,22 @@ class SpreadSheetWriter {
 }
 
 const SLACK_API_URL = 'https://slack.com/api/';
-
-const API_TOKEN = Utils.getScriptProperty('slack_api_token');
+const SLACK_API_TOKEN = Utils.getScriptProperty('slack_api_token');
+const SHEET_FILE_ID = Utils.getScriptProperty('sheet_file_id');
+const SLACK_CHANNEL_ID = Utils.getScriptProperty('slack_channel_id');
 
 function run() {
-  const channelId = Utils.getScriptProperty('slack_channel_id');
-  const slackApi = new SlackApi(SLACK_API_URL, API_TOKEN);
-  const response = slackApi.executeCmd('pins.list', { channel: channelId });
-  Logger.log(response);
+  const slackApi = new SlackApi(SLACK_API_URL, SLACK_API_TOKEN);
+  const response = slackApi.executeCmd('pins.list', { channel: SLACK_CHANNEL_ID });
+
+  const items = ((response: any): SlackItemsResponse).items;
+  const messages = items.filter(item => !!item.message)
+                        .map(item => item.message)
+                        .map(message => ({
+                          user: slackApi.replaceUserIdWithName((message && message.user) || ''),
+                          text: slackApi.unescapeMessageText((message && message.text) || '' ),
+                        }));
+
+  const ss = new SpreadSheetWriter(SHEET_FILE_ID);
+  messages.forEach(message => ss.write([message.user, message.text]));
 }
