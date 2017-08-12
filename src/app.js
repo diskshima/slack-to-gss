@@ -34,6 +34,9 @@ declare class Spreadsheet {
 
 declare class Sheet {
   appendRow(rowContents: Array<*>): Sheet;
+  getLastRow(): number;
+  getSheetValues(startRow: number, startColumn: number, numRows: number, numColumns: number):
+    Array<Array<*>>;
 }
 
 declare class SlackResponse {
@@ -64,9 +67,17 @@ declare class SlackItem {
 }
 
 declare class SlackMessage {
-  ts: number;
+  ts: string;
   user: string;
   text: string;
+}
+
+type SheetRow = {
+  timestamp: string,
+  datetime: ?Date,
+  deleted: boolean,
+  user: string,
+  text: string,
 }
 
 class Utils {
@@ -122,20 +133,13 @@ class SlackApi {
     return data;
   }
 
-  formatMessage = (message: ?SlackMessage): Object => {
-    if (!message) {
-      return {
-        timestamp: null,
-        user: null,
-        text: '',
-      };
-    }
-
-    const timestamp = new Date(message.ts * 1000);
-    const user = message.user ? this.replaceUserIdWithName(message.user) : null;
+  formatMessage = (message: SlackMessage): SheetRow => {
+    const timestamp = message.ts;
+    const datetime = new Date(parseFloat(timestamp) * 1000);
+    const user = message.user ? this.replaceUserIdWithName(message.user) : '';
     const text = message.text ? this.unescapeMessageText(message.text) : '';
 
-    return { timestamp, user, text };
+    return { timestamp, datetime, user, text, deleted: false };
   }
 
   replaceUserIdWithName = (userId: string): string => {
@@ -156,7 +160,7 @@ class SlackApi {
   }
 }
 
-class SpreadSheetWriter {
+class SpreadSheetAccessor {
   file: Spreadsheet;
   sheet: Sheet;
 
@@ -165,14 +169,68 @@ class SpreadSheetWriter {
     this.sheet = this.getOrCreateSheet('Slack Logs');
   }
 
-  getOrCreateSheet(sheetName: string): Sheet {
+  getOrCreateSheet = (sheetName: string): Sheet => {
     const tmpSheet = this.file.getSheetByName(sheetName);
     return tmpSheet || this.file.insertSheet(sheetName);
   }
 
-  write(row: Array<string>): void {
+  write = (row: Array<*>): void => {
     this.sheet.appendRow(row);
   }
+
+  readColumn = (columnNumber: number): Array<Object> => {
+    const lastRow = this.sheet.getLastRow();
+    if (lastRow === 0) { return []; }
+    const rows = this.sheet.getSheetValues(1, columnNumber, lastRow, 1);
+    return rows.map(row => row[0]);
+  }
+
+  readRows = (): Array<SheetRow> => {
+    const lastRow = this.sheet.getLastRow();
+    if (lastRow === 0) { return []; }
+    const rows = this.sheet.getSheetValues(1, 1, lastRow, 5);
+    return rows.map(row => ({
+      timestamp: row[0],
+      deleted: row[1] === '削除済み',
+      datetime: new Date((row[2]: string)),
+      user: (row[3]: string),
+      text: (row[4]: string),
+    }));
+  }
+}
+
+type RowDiff = {
+  added: Array<SheetRow>,
+  deleted: Array<SheetRow>,
+}
+
+const calculateDiff = (messages: Array<SheetRow>, rows: Array<SheetRow>): RowDiff => {
+  const added = [];
+  const deleted = [];
+
+  const tsToRow = rows.reduce((hash, row) => {
+    hash[row.timestamp] = row;
+    return hash;
+  }, {});
+
+  messages.forEach((message) => {
+    if (!tsToRow[message.timestamp]) {
+      added.push(message);
+    }
+  });
+
+  const tsToMessage = messages.reduce((hash, message) => {
+    hash[message.timestamp] = message;
+    return hash;
+  }, {});
+
+  rows.forEach((row) => {
+    if (!tsToMessage[row.timestamp]) {
+      deleted.push(row);
+    }
+  });
+
+  return { added, deleted };
 }
 
 const SLACK_API_URL = 'https://slack.com/api/';
@@ -185,10 +243,30 @@ function run() {
   const response = slackApi.executeCmd('pins.list', { channel: SLACK_CHANNEL_ID });
 
   const items = ((response: any): SlackItemsResponse).items;
-  const messages = items.filter(item => !!item.message)
-                        .map(item => item.message)
-                        .map(slackApi.formatMessage);
 
-  const ss = new SpreadSheetWriter(SHEET_FILE_ID);
-  messages.forEach(message => ss.write([message.timestamp, message.user, message.text]));
+  // TODO: Currently only supports messages. Support files too.
+  const serverRows = [];
+  items.forEach((item) => {
+    if (item.message) {
+      serverRows.push(slackApi.formatMessage(item.message));
+    }
+  });
+
+  const ss = new SpreadSheetAccessor(SHEET_FILE_ID);
+  const sheetRows = ss.readRows();
+
+  const diff = calculateDiff(serverRows, sheetRows);
+
+  diff.added.forEach((message) => {
+    const deleted = message.deleted ? '削除済み' : '';
+    ss.write([
+      `'${message.timestamp}`,
+      deleted,
+      message.datetime ? message.datetime : '',
+      message.user,
+      message.text
+    ]);
+  });
+
+  // TODO: Process deleted.
 }
