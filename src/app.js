@@ -59,8 +59,14 @@ declare class SlackItem {
   channel: string;
   created: number;
   created_by: string;
-  message: ?Object;
+  message: ?SlackMessage;
   file: ?Object;
+}
+
+declare class SlackMessage {
+  ts: number;
+  user: string;
+  text: string;
 }
 
 class Utils {
@@ -86,7 +92,7 @@ class SlackApi {
     this.memberNames = this.readMemberNames();
   }
 
-  readMemberNames(): StringToString {
+  readMemberNames = (): StringToString => {
     const response = this.executeCmd('users.list');
     const userListResponse = ((response: any): SlackMembersResponse);
     return userListResponse.members.reduce((hash, member) => {
@@ -95,7 +101,7 @@ class SlackApi {
     }, {});
   }
 
-  executeCmd(path: string, params: { [key: string]: any } = {}): SlackResponse {
+  executeCmd = (path: string, params: { [key: string]: any } = {}): SlackResponse => {
     const url = `${this.slackApiUrl}${path}?`;
     const queryParams = [ `token=${encodeURIComponent(this.token)}` ];
 
@@ -116,12 +122,28 @@ class SlackApi {
     return data;
   }
 
-  replaceUserIdWithName(userId: string): string {
+  formatMessage = (message: ?SlackMessage): Object => {
+    if (!message) {
+      return {
+        timestamp: null,
+        user: null,
+        text: '',
+      };
+    }
+
+    const timestamp = new Date(message.ts * 1000);
+    const user = message.user ? this.replaceUserIdWithName(message.user) : null;
+    const text = message.text ? this.unescapeMessageText(message.text) : '';
+
+    return { timestamp, user, text };
+  }
+
+  replaceUserIdWithName = (userId: string): string => {
     const name = this.memberNames[userId];
     return name ? `${name}` : userId;
   }
 
-  unescapeMessageText(text: ?string): string {
+  unescapeMessageText = (text: ?string): string => {
     return (text || '')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
@@ -165,11 +187,8 @@ function run() {
   const items = ((response: any): SlackItemsResponse).items;
   const messages = items.filter(item => !!item.message)
                         .map(item => item.message)
-                        .map(message => ({
-                          user: slackApi.replaceUserIdWithName((message && message.user) || ''),
-                          text: slackApi.unescapeMessageText((message && message.text) || '' ),
-                        }));
+                        .map(slackApi.formatMessage);
 
   const ss = new SpreadSheetWriter(SHEET_FILE_ID);
-  messages.forEach(message => ss.write([message.user, message.text]));
+  messages.forEach(message => ss.write([message.timestamp, message.user, message.text]));
 }
