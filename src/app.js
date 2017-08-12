@@ -75,7 +75,6 @@ declare class SlackMessage {
 type SheetRow = {
   timestamp: string,
   datetime: ?Date,
-  deleted: boolean,
   user: string,
   text: string,
 }
@@ -139,7 +138,7 @@ class SlackApi {
     const user = message.user ? this.replaceUserIdWithName(message.user) : '';
     const text = message.text ? this.unescapeMessageText(message.text) : '';
 
-    return { timestamp, datetime, user, text, deleted: false };
+    return { timestamp, datetime, user, text };
   }
 
   replaceUserIdWithName = (userId: string): string => {
@@ -191,7 +190,6 @@ class SpreadSheetAccessor {
     const rows = this.sheet.getSheetValues(1, 1, lastRow, 5);
     return rows.map(row => ({
       timestamp: row[0],
-      deleted: row[1] === '削除済み',
       datetime: new Date((row[2]: string)),
       user: (row[3]: string),
       text: (row[4]: string),
@@ -258,10 +256,8 @@ function run() {
   const diff = calculateDiff(serverRows, sheetRows);
 
   diff.added.forEach((message) => {
-    const deleted = message.deleted ? '削除済み' : '';
     ss.write([
       `'${message.timestamp}`,
-      deleted,
       message.datetime ? message.datetime : '',
       message.user,
       message.text
