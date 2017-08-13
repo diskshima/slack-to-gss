@@ -1,6 +1,13 @@
 /* @flow */
 
 type StringToString = { [ key: string ]: string };
+type CellType = string | Date | number;
+type SheetRow = {
+  timestamp: string,
+  datetime: ?Date,
+  user: string,
+  text: string,
+}
 
 declare class Logger {
   static log(data: Object): void;
@@ -33,7 +40,7 @@ declare class Spreadsheet {
 }
 
 declare class Sheet {
-  appendRow(rowContents: Array<*>): Sheet;
+  appendRow(rowContents: Array<CellType>): Sheet;
   getLastRow(): number;
   getSheetValues(startRow: number, startColumn: number, numRows: number, numColumns: number):
     Array<Array<*>>;
@@ -58,25 +65,30 @@ declare class SlackMember {
 }
 
 declare class SlackItem {
-  type: string;
-  channel: string;
+  type: "message" | "file";
   created: number;
   created_by: string;
   message: ?SlackMessage;
   file: ?Object;
 }
 
-declare class SlackMessage {
-  ts: string;
+declare class SlackEntry {
   user: string;
+}
+
+declare class SlackMessage extends SlackEntry {
+  ts: string;
+  channel: string;
   text: string;
 }
 
-type SheetRow = {
-  timestamp: string,
-  datetime: ?Date,
-  user: string,
-  text: string,
+declare class SlackFile extends SlackEntry {
+  id: number;
+  timestamp: number;
+  created: number;
+  name: string;
+  title: string;
+  permalink: string;
 }
 
 class Utils {
@@ -141,6 +153,16 @@ class SlackApi {
     return { timestamp, datetime, user, text };
   }
 
+  formatFile = (file: SlackFile): SheetRow => {
+    const timestamp = file.id.toString();
+    const datetime = new Date(file.created * 1000);
+    const user = this.replaceUserIdWithName(file.user);
+    const name = file.name;
+    const link = file.permalink;
+
+    return { timestamp, datetime, user, text: `=HYPERLINK("${link}", "${name}")` };
+  }
+
   replaceUserIdWithName = (userId: string): string => {
     const name = this.memberNames[userId];
     return name ? `${name}` : userId;
@@ -173,7 +195,7 @@ class SpreadSheetAccessor {
     return tmpSheet || this.file.insertSheet(sheetName);
   }
 
-  write = (row: Array<*>): void => {
+  write = (row: Array<CellType>): void => {
     this.sheet.appendRow(row);
   }
 
@@ -242,11 +264,23 @@ function run() {
 
   const items = ((response: any): SlackItemsResponse).items;
 
-  // TODO: Currently only supports messages. Support files too.
   const serverRows = [];
   items.forEach((item) => {
-    if (item.message) {
+    switch (item.type) {
+    case 'message':
+      if (!item.message) {
+        throw 'No message found on Slack response.';
+      }
       serverRows.push(slackApi.formatMessage(item.message));
+      break;
+    case 'file':
+      if (!item.file) {
+        throw 'No file found on Slack response.';
+      }
+      serverRows.push(slackApi.formatFile(item.file));
+      break;
+    default:
+      throw `Do not know how to handle ${item.type}.`;
     }
   });
 
