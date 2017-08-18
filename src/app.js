@@ -2,12 +2,6 @@
 
 type StringToString = { [ key: string ]: string };
 type CellType = string | Date | number;
-type SheetRow = {
-  timestamp: string,
-  datetime: ?Date,
-  user: string,
-  text: string,
-}
 
 declare class Logger {
   static log(data: Object): void;
@@ -44,6 +38,12 @@ declare class Sheet {
   getLastRow(): number;
   getSheetValues(startRow: number, startColumn: number, numRows: number, numColumns: number):
     Array<Array<*>>;
+  getRange(row: number, column: number, numRows: number, numColumns: number): Range;
+}
+
+declare class Range {
+  getValues(): Array<Array<*>>;
+  setValues(Array<Array<*>>): Range;
 }
 
 declare class SlackResponse {
@@ -150,7 +150,7 @@ class SlackApi {
     const user = message.user ? this.replaceUserIdWithName(message.user) : '';
     const text = message.text ? this.unescapeMessageText(message.text) : '';
 
-    return { timestamp, datetime, user, text };
+    return SheetRow.fromValues(timestamp, datetime, user, text);
   }
 
   formatFile = (file: SlackFile): SheetRow => {
@@ -160,7 +160,13 @@ class SlackApi {
     const name = file.name;
     const link = file.permalink;
 
-    return { timestamp, datetime, user, text: `=HYPERLINK("${link}", "${name}")` };
+    const row = new SheetRow();
+    row.timestamp = timestamp;
+    row.datetime = datetime;
+    row.user = user;
+    row.text = `=HYPERLINK("${link}", "${name}")`;
+
+    return row;
   }
 
   replaceUserIdWithName = (userId: string): string => {
@@ -195,10 +201,6 @@ class SpreadSheetAccessor {
     return tmpSheet || this.file.insertSheet(sheetName);
   }
 
-  write = (row: Array<CellType>): void => {
-    this.sheet.appendRow(row);
-  }
-
   readColumn = (columnNumber: number): Array<Object> => {
     const lastRow = this.sheet.getLastRow();
     if (lastRow === 0) { return []; }
@@ -209,13 +211,80 @@ class SpreadSheetAccessor {
   readRows = (): Array<SheetRow> => {
     const lastRow = this.sheet.getLastRow();
     if (lastRow === 0) { return []; }
-    const rows = this.sheet.getSheetValues(1, 1, lastRow, 5);
-    return rows.map(row => ({
-      timestamp: row[0],
-      datetime: new Date((row[2]: string)),
-      user: (row[3]: string),
-      text: (row[4]: string),
-    }));
+
+    const rows = [];
+
+    for (let i = 1; i <= lastRow; i++) {
+      rows.push(SheetRow.fromSheetRow(this.sheet, i));
+    }
+
+    return rows;
+  }
+}
+
+class SheetRow {
+  sheet: ?Sheet;
+  range: ?Range;
+  timestamp: string;
+  datetime: ?Date;
+  user: string;
+  text: string;
+  pinned: boolean;
+
+  static fromSheetRow(sheet: Sheet, rowNumber: number) {
+    const sheetRow = new SheetRow();
+    sheetRow.pinned = true;
+
+    sheetRow.sheet = sheet;
+    sheetRow.readValues(rowNumber);
+
+    return sheetRow;
+  }
+
+  static fromValues(timestamp: string, datetime: ?Date, user: string, text: string) {
+    const sheetRow = new SheetRow();
+    sheetRow.pinned = true;
+
+    sheetRow.timestamp = timestamp;
+    sheetRow.datetime = datetime;
+    sheetRow.user = user;
+    sheetRow.text = text;
+
+    return sheetRow;
+  }
+
+  readValues = (rowNumber: number): void => {
+    if (!this.sheet) { return; }
+
+    this.range = this.sheet.getRange(rowNumber, 1, 1, 5);
+    const firstLine = this.range.getValues()[0];
+    this.timestamp = firstLine[0];
+    this.datetime = firstLine[1];
+    this.user = firstLine[2];
+    this.text = firstLine[3];
+  }
+
+  write = (toSheet: ?Sheet): void => {
+    const rowValues = [
+      `'${this.timestamp}`,
+      this.datetime ? this.datetime : '',
+      this.user,
+      this.text,
+      this.pinned ? '' : 'Pin削除済み',
+    ];
+
+    if (this.range) {
+      this.range.setValues([rowValues]);
+    } else if (toSheet) {
+      toSheet.appendRow(rowValues);
+    } else {
+      throw 'No range or sheet to write to.';
+    }
+  }
+
+  setPinned = (pinned: boolean): SheetRow => {
+    this.pinned = pinned;
+    return this;
   }
 }
 
@@ -264,7 +333,9 @@ function run() {
 
   const items = ((response: any): SlackItemsResponse).items;
 
+  const ss = new SpreadSheetAccessor(SHEET_FILE_ID);
   const serverRows = [];
+
   items.forEach((item) => {
     switch (item.type) {
     case 'message':
@@ -284,19 +355,13 @@ function run() {
     }
   });
 
-  const ss = new SpreadSheetAccessor(SHEET_FILE_ID);
   const sheetRows = ss.readRows();
 
   const diff = calculateDiff(serverRows, sheetRows);
 
-  diff.added.forEach((message) => {
-    ss.write([
-      `'${message.timestamp}`,
-      message.datetime ? message.datetime : '',
-      message.user,
-      message.text
-    ]);
+  diff.added.forEach(row => row.write(ss.sheet));
+  diff.deleted.forEach((row) => {
+    row.setPinned(false);
+    row.write();
   });
-
-  // TODO: Process deleted.
 }
