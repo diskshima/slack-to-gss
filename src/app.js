@@ -96,129 +96,10 @@ class Utils {
     const value = PropertiesService.getScriptProperties().getProperty(propertyName);
 
     if (!value) {
-      throw `Script property ${propertyName} is missing`;
+      throw new Error(`Script property ${propertyName} is missing`);
     }
 
     return value;
-  };
-}
-
-class SlackApi {
-  slackApiUrl: string;
-  token :string;
-  memberNames: StringToString;
-
-  constructor(slackApiUrl: string, token: string) {
-    this.slackApiUrl = slackApiUrl;
-    this.token = token;
-    this.memberNames = this.readMemberNames();
-  }
-
-  readMemberNames = (): StringToString => {
-    const response = this.executeCmd('users.list');
-    const userListResponse = ((response: any): SlackMembersResponse);
-    return userListResponse.members.reduce((hash, member) => {
-      hash[member.id] = member.name;
-      return hash;
-    }, {});
-  }
-
-  executeCmd = (path: string, params: { [key: string]: any } = {}): SlackResponse => {
-    const url = `${this.slackApiUrl}${path}?`;
-    const queryParams = [ `token=${encodeURIComponent(this.token)}` ];
-
-    for (let k in params) {
-      queryParams.push(`${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`);
-    }
-
-    const fullUrl = `${url}${queryParams.join('&')}`;
-    Logger.log('URL: %s', fullUrl);
-
-    const resp = UrlFetchApp.fetch(fullUrl);
-    const data: SlackResponse = JSON.parse(resp.getContentText());
-
-    if (data.error) {
-      throw `GET ${path}: ${data.error}`;
-    }
-
-    return data;
-  }
-
-  formatMessage = (message: SlackMessage): SheetRow => {
-    const timestamp = message.ts;
-    const datetime = new Date(parseFloat(timestamp) * 1000);
-    const user = message.user ? this.replaceUserIdWithName(message.user) : '';
-    const text = message.text ? this.unescapeMessageText(message.text) : '';
-
-    return SheetRow.fromValues(timestamp, datetime, user, text);
-  }
-
-  formatFile = (file: SlackFile): SheetRow => {
-    const timestamp = file.id.toString();
-    const datetime = new Date(file.created * 1000);
-    const user = this.replaceUserIdWithName(file.user);
-    const name = file.name;
-    const link = file.permalink;
-
-    const row = new SheetRow();
-    row.timestamp = timestamp;
-    row.datetime = datetime;
-    row.user = user;
-    row.text = `=HYPERLINK("${link}", "${name}")`;
-
-    return row;
-  }
-
-  replaceUserIdWithName = (userId: string): string => {
-    const name = this.memberNames[userId];
-    return name ? `${name}` : userId;
-  }
-
-  unescapeMessageText = (text: ?string): string => {
-    return (text || '')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, '&')
-      .replace(/<@(\w+?)>/g, ($0, userID) => {
-        const name = this.memberNames[userID];
-        return name ? `@${name}` : $0;
-      });
-  }
-}
-
-class SpreadSheetAccessor {
-  file: Spreadsheet;
-  sheet: Sheet;
-
-  constructor(sheetId: string) {
-    this.file = SpreadsheetApp.openById(sheetId);
-    this.sheet = this.getOrCreateSheet('Slack Logs');
-  }
-
-  getOrCreateSheet = (sheetName: string): Sheet => {
-    const tmpSheet = this.file.getSheetByName(sheetName);
-    return tmpSheet || this.file.insertSheet(sheetName);
-  }
-
-  readColumn = (columnNumber: number): Array<Object> => {
-    const lastRow = this.sheet.getLastRow();
-    if (lastRow === 0) { return []; }
-    const rows = this.sheet.getSheetValues(1, columnNumber, lastRow, 1);
-    return rows.map(row => row[0]);
-  }
-
-  readRows = (): Array<SheetRow> => {
-    const lastRow = this.sheet.getLastRow();
-    if (lastRow === 0) { return []; }
-
-    const rows = [];
-
-    for (let i = 1; i <= lastRow; i++) {
-      rows.push(SheetRow.fromSheetRow(this.sheet, i));
-    }
-
-    return rows;
   }
 }
 
@@ -278,13 +159,134 @@ class SheetRow {
     } else if (toSheet) {
       toSheet.appendRow(rowValues);
     } else {
-      throw 'No range or sheet to write to.';
+      throw new Error('No range or sheet to write to.');
     }
   }
 
   setPinned = (pinned: boolean): SheetRow => {
     this.pinned = pinned;
     return this;
+  }
+}
+
+
+class SlackApi {
+  slackApiUrl: string;
+  token: string;
+  memberNames: StringToString;
+
+  constructor(slackApiUrl: string, token: string) {
+    this.slackApiUrl = slackApiUrl;
+    this.token = token;
+    this.memberNames = this.readMemberNames();
+  }
+
+  readMemberNames = (): StringToString => {
+    const response = this.executeCmd('users.list');
+    const userListResponse = ((response: any): SlackMembersResponse);
+    return userListResponse.members.reduce((hash, member) => {
+      // eslint-disable-next-line no-param-reassign
+      hash[member.id] = member.name;
+      return hash;
+    }, {});
+  }
+
+  executeCmd = (path: string, params: { [key: string]: any } = {}): SlackResponse => {
+    const url = `${this.slackApiUrl}${path}?`;
+    const queryParams = [`token=${encodeURIComponent(this.token)}`];
+
+    Object.keys(params).forEach((key) => {
+      const value = params[key];
+      queryParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+    });
+
+    const fullUrl = `${url}${queryParams.join('&')}`;
+    Logger.log('URL: %s', fullUrl);
+
+    const resp = UrlFetchApp.fetch(fullUrl);
+    const data: SlackResponse = JSON.parse(resp.getContentText());
+
+    if (data.error) {
+      throw new Error(`GET ${path}: ${data.error}`);
+    }
+
+    return data;
+  }
+
+  formatMessage = (message: SlackMessage): SheetRow => {
+    const timestamp = message.ts;
+    const datetime = new Date(parseFloat(timestamp) * 1000);
+    const user = message.user ? this.replaceUserIdWithName(message.user) : '';
+    const text = message.text ? this.unescapeMessageText(message.text) : '';
+
+    return SheetRow.fromValues(timestamp, datetime, user, text);
+  }
+
+  formatFile = (file: SlackFile): SheetRow => {
+    const timestamp = file.id.toString();
+    const datetime = new Date(file.created * 1000);
+    const user = this.replaceUserIdWithName(file.user);
+    const name = file.name;
+    const link = file.permalink;
+
+    const row = new SheetRow();
+    row.timestamp = timestamp;
+    row.datetime = datetime;
+    row.user = user;
+    row.text = `=HYPERLINK("${link}", "${name}")`;
+
+    return row;
+  }
+
+  replaceUserIdWithName = (userId: string): string => {
+    const name = this.memberNames[userId];
+    return name ? `${name}` : userId;
+  }
+
+  unescapeMessageText = (text: ?string): string =>
+    (text || '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/<@(\w+?)>/g, ($0, userID) => {
+        const name = this.memberNames[userID];
+        return name ? `@${name}` : $0;
+      });
+}
+
+class SpreadSheetAccessor {
+  file: Spreadsheet;
+  sheet: Sheet;
+
+  constructor(sheetId: string) {
+    this.file = SpreadsheetApp.openById(sheetId);
+    this.sheet = this.getOrCreateSheet('Slack Logs');
+  }
+
+  getOrCreateSheet = (sheetName: string): Sheet => {
+    const tmpSheet = this.file.getSheetByName(sheetName);
+    return tmpSheet || this.file.insertSheet(sheetName);
+  }
+
+  readColumn = (columnNumber: number): Array<Object> => {
+    const lastRow = this.sheet.getLastRow();
+    if (lastRow === 0) { return []; }
+    const rows = this.sheet.getSheetValues(1, columnNumber, lastRow, 1);
+    return rows.map(row => row[0]);
+  }
+
+  readRows = (): Array<SheetRow> => {
+    const lastRow = this.sheet.getLastRow();
+    if (lastRow === 0) { return []; }
+
+    const rows = [];
+
+    for (let i = 1; i <= lastRow; i += 1) {
+      rows.push(SheetRow.fromSheetRow(this.sheet, i));
+    }
+
+    return rows;
   }
 }
 
@@ -298,6 +300,7 @@ const calculateDiff = (messages: Array<SheetRow>, rows: Array<SheetRow>): RowDif
   const deleted = [];
 
   const tsToRow = rows.reduce((hash, row) => {
+    // eslint-disable-next-line no-param-reassign
     hash[row.timestamp] = row;
     return hash;
   }, {});
@@ -309,6 +312,7 @@ const calculateDiff = (messages: Array<SheetRow>, rows: Array<SheetRow>): RowDif
   });
 
   const tsToMessage = messages.reduce((hash, message) => {
+    // eslint-disable-next-line no-param-reassign
     hash[message.timestamp] = message;
     return hash;
   }, {});
@@ -320,13 +324,14 @@ const calculateDiff = (messages: Array<SheetRow>, rows: Array<SheetRow>): RowDif
   });
 
   return { added, deleted };
-}
+};
 
 const SLACK_API_URL = 'https://slack.com/api/';
 const SLACK_API_TOKEN = Utils.getScriptProperty('slack_api_token');
 const SHEET_FILE_ID = Utils.getScriptProperty('sheet_file_id');
 const SLACK_CHANNEL_ID = Utils.getScriptProperty('slack_channel_id');
 
+// eslint-disable-next-line no-unused-vars
 function run() {
   const slackApi = new SlackApi(SLACK_API_URL, SLACK_API_TOKEN);
   const response = slackApi.executeCmd('pins.list', { channel: SLACK_CHANNEL_ID });
@@ -338,20 +343,20 @@ function run() {
 
   items.forEach((item) => {
     switch (item.type) {
-    case 'message':
-      if (!item.message) {
-        throw 'No message found on Slack response.';
-      }
-      serverRows.push(slackApi.formatMessage(item.message));
-      break;
-    case 'file':
-      if (!item.file) {
-        throw 'No file found on Slack response.';
-      }
-      serverRows.push(slackApi.formatFile(item.file));
-      break;
-    default:
-      throw `Do not know how to handle ${item.type}.`;
+      case 'message':
+        if (!item.message) {
+          throw new Error('No message found on Slack response.');
+        }
+        serverRows.push(slackApi.formatMessage(item.message));
+        break;
+      case 'file':
+        if (!item.file) {
+          throw new Error('No file found on Slack response.');
+        }
+        serverRows.push(slackApi.formatFile(item.file));
+        break;
+      default:
+        throw new Error(`Do not know how to handle ${item.type}.`);
     }
   });
 
